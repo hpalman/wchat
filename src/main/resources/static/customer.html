@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Customer Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+<body>
+    <div id="login-form">
+        <input type="text" id="username" placeholder="이름을 입력하세요">
+        <button onclick="login()">로그인</button>
+    </div>
+
+    <div id="chat-page" style="display:none;">
+        <h3>고객 상담 센터</h3>
+        <div id="msg-box" style="width:400px; height:300px; border:1px solid #ccc; overflow-y:scroll;"></div>
+        <input type="text" id="msg-input">
+        <button onclick="sendMsg()">전송</button>
+        <button onclick="reqCounselor()" style="background:orange;">상담사 연결</button>
+    </div>
+
+    <script>
+        let stompClient = null;
+        let roomId = null;
+        let username = null;
+
+        function login() {
+            username = document.getElementById('username').value;
+            fetch('/chat/room?name=' + username, {method:'POST'})
+                .then(res => res.json())
+                .then(room => {
+                    roomId = room.roomId;
+                    connect();
+                });
+        }
+
+        function connect() {
+            const socket = new SockJS('/ws-stomp');
+            stompClient = Stomp.over(socket);
+            stompClient.connect({}, () => {
+                document.getElementById('login-form').style.display = 'none';
+                document.getElementById('chat-page').style.display = 'block';
+                stompClient.subscribe('/sub/chat/room/' + roomId, (data) => {
+                    const msg = JSON.parse(data.body);
+                    document.getElementById('msg-box').innerHTML += `<div><b>${msg.sender}:</b> ${msg.message}</div>`;
+                });
+            });
+        }
+
+        function sendMsg() {
+            const text = document.getElementById('msg-input').value;
+            stompClient.send("/pub/chat/message", {}, JSON.stringify({type:'TALK', roomId:roomId, sender:username, message:text}));
+            document.getElementById('msg-input').value = '';
+        }
+
+        function reqCounselor() {
+            stompClient.send("/pub/chat/message", {}, JSON.stringify({type:'REQ_COUNSELOR', roomId:roomId, sender:username}));
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Counselor Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+<body>
+    <h2>상담원 대시보드</h2>
+    <div style="display:flex;">
+        <div style="width:200px; border-right:1px solid #000;">
+            <h4>대기 고객 목록</h4>
+            <div id="room-list"></div>
+        </div>
+        <div style="padding-left:20px;">
+            <h4 id="target-name">상담창</h4>
+            <div id="msg-box" style="width:400px; height:300px; border:1px solid #ccc; overflow-y:scroll;"></div>
+            <input type="text" id="msg-input">
+            <button onclick="sendMsg()">전송</button>
+        </div>
+    </div>
+
+    <script>
+        let stompClient = null;
+        let currentRoomId = null;
+
+        function init() {
+            const socket = new SockJS('/ws-stomp');
+            stompClient = Stomp.over(socket);
+            stompClient.connect({}, () => {
+                // 실시간 연결 요청 알림 구독
+                stompClient.subscribe('/sub/counselor/notifications', (data) => {
+                    const msg = JSON.parse(data.body);
+                    alert(msg.message);
+                    loadRooms();
+                });
+                loadRooms();
+            });
+        }
+
+        function loadRooms() {
+            fetch('/chat/rooms').then(res => res.json()).then(data => {
+                const list = document.getElementById('room-list');
+                list.innerHTML = '';
+                data.forEach(room => {
+                    list.innerHTML += `<div>${room.customerName} <button onclick="acceptRoom('${room.roomId}')">수락</button></div>`;
+                });
+            });
+        }
+
+        function acceptRoom(roomId) {
+            currentRoomId = roomId;
+            document.getElementById('target-name').innerText = "상담 중: " + roomId;
+            stompClient.subscribe('/sub/chat/room/' + roomId, (data) => {
+                const msg = JSON.parse(data.body);
+                document.getElementById('msg-box').innerHTML += `<div><b>${msg.sender}:</b> ${msg.message}</div>`;
+            });
+            stompClient.send("/pub/chat/message", {}, JSON.stringify({type:'ACCEPT', roomId:roomId, sender:'Counselor'}));
+        }
+
+        function sendMsg() {
+            const text = document.getElementById('msg-input').value;
+            stompClient.send("/pub/chat/message", {}, JSON.stringify({type:'TALK', roomId:currentRoomId, sender:'Counselor', message:text}));
+            document.getElementById('msg-input').value = '';
+        }
+
+        init();
+    </script>
+</body>
+</html>
