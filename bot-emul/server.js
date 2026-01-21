@@ -12,7 +12,7 @@ const app = express();
 app.use(express.json());
 
 // 회신을 보낼 wchat 서버의 설정 (필요 시 수정)
-const WCHAT_SERVER_URL = "http://localhost:8080/chat/bot/callback";
+const WCHAT_SERVER_URL = "http://localhost:8083/chat/bot/callback";
 
 /**
  * [POST] /api/ask

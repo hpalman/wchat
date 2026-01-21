@@ -1069,3 +1069,138 @@ public class ChatRoomController {
     }
 }
 ```
+
+### 2. 소스코드 상세 설명
+### 1. 데이터 수신: bot-emulator는 axios.post를 통해 ChatMessage 구조의 JSON을 보냅니다. 이때 message 필드 안에 "여러 줄의 JSON이 섞인 TEXT"가 들어있습니다.
+
+### 2. 문자열 파싱 (Regex):
+
+Pattern.compile("\\{.*\\}")를 사용하여 텍스트 내부에 숨겨진 {...} 형태의 JSON 문자열을 찾아냅니다.
+
+봇 에뮬레이터가 보낸 응답 중 실제 고객에게 보여주고 싶은 핵심 내용만 뽑아내기 위함입니다.
+
+JSON 객체화: ObjectMapper를 사용하여 추출된 문자열을 JsonNode로 변환하고, message 필드값만 깔끔하게 가져옵니다.
+
+Redis 발행: 가공된 메시지를 redisPublisher.publish()를 통해 Redis Topic으로 던지면, 이를 구독하고 있던 RedisSubscriber가 WebSocket을 통해 고객의 브라우저(customer.html)로 메시지를 실시간 전달합니다.
+
+### 3. 시스템 연동 확인 (Flow)
+1. <b>고객</b>: customer.html에서 메시지 전송 → /pub/chat/message
+2. <b>wchat 서버</b>: ChatController에서 메시지 수신 → BotService가 WebClient로 bot-emulator 호출
+3. <b>bot-emulator</b>: /api/ask 수신 → 3초 지연 → /chat/bot/callback 호출
+4. <b>wchat 서버</b>: ChatRoomController.botCallback 수신 → 텍스트 파싱 → Redis Publish
+5. <b>고객</b>: customer.html 화면에 봇의 답변이 표시됨
+
+<b>이제 봇의 비동기 응답까지 완벽하게 처리됩니다. 고객 채팅창에서 봇의 답변과 상담사의 답변을 시각적으로 구분(예: 말풍선 색상 변경)하는 CSS 처리가 필요하신가요?
+</b>
+
+## Q(gemini) wchat의 소스코드에서 사용하는 redis의 클라이언트 redis-cli를 통해 상담사나 고객에게 메시지를 전송할 수 있는 방법을 알려주세요
+## A. 
+wchat 시스템은 Redis Pub/Sub 기능을 통해 서버 간 메시지를 공유하고, 이를 RedisSubscriber가 받아 웹소켓으로 브로드캐스팅하는 구조입니다.
+
+따라서 redis-cli를 사용하여 Redis의 특정 채널에 메시지를 발행(Publish)하면, 서버를 거치지 않고도 고객이나 상담사의 채팅창에 강제로 메시지를 띄울 수 있습니다.
+
+### 1. Redis Pub/Sub 메시지 구조 확인
+   현재 RedisConfig.java에서 설정한 토픽 이름은 chatRoom이며, Jackson2JsonRedisSerializer를 사용하여 JSON 형식으로 데이터를 주고받습니다.
+
+* 채널명: chatRoom
+
+* 메시지 형식: JSON 문자열 (ChatMessage 객체 규격)
+
+### 2. redis-cli를 통한 메시지 전송 방법
+   터미널에서 redis-cli에 접속한 뒤 아래 명령어를 입력합니다.
+
+### A. 특정 고객 채팅방에 메시지 보내기 (공지 또는 시스템 메시지)
+고객의 roomId를 알고 있다면 해당 방으로 메시지를 보낼 수 있습니다.
+
+```Bash
+# 형식: PUBLISH [채널명] "[JSON 데이터]"
+publish chatRoom "{\"type\":\"TALK\",\"roomId\":\"room_123\",\"sender\":\"ADMIN\",\"message\":\"서버 점검이 10분 뒤 시작됩니다.\"}"
+```
+### B. 상담사 대시보드에 강제 알림 보내기
+상담사가 구독 중인 알림 채널에 연결 요청 메시지를 강제로 발생시킬 수 있습니다.
+
+```Bash
+
+publish chatRoom "{\"type\":\"REQ_COUNSELOR\",\"roomId\":\"emergency_01\",\"sender\":\"VIP고객\",\"message\":\"긴급 상담 요청입니다!\"}"
+```
+### 3. 실시간 모니터링 방법 (Subscribe)
+   애플리케이션이 Redis로 메시지를 잘 보내고 있는지, 혹은 봇 에뮬레이터의 응답이 Redis에 도착했는지 확인하려면 별도의 터미널 창에서 아래 명령어를 실행해 두세요.
+
+```Bash
+
+# 모든 채팅 메시지 실시간 모니터링
+subscribe chatRoom
+허) ex: redis-cli -p 16379 이후 SUBSCRIBE CHAR_ROOMS
+```
+### 4. 주의사항: JSON 직렬화 포맷
+Spring Boot에서 Jackson2JsonRedisSerializer(Object.class)를 사용하면 JSON 내부에 클래스 정보(@class)가 포함될 수 있습니다. 만약 위 명령어(publish)를 입력했는데 서버 리스너(RedisSubscriber)에서 **"역직렬화 에러"**가 발생한다면, 서버 소스코드의 RedisConfig를 아래와 같이 점검해야 합니다.
+
+* <b>순수 JSON 파싱을 원할 때</b>: StringRedisSerializer를 사용하거나, redis-cli에서 보낼 때 서버가 기대하는 JSON 필드 구조를 완벽히 맞춰야 합니다.
+
+* <b>간편한 테스트를 위한 팁</b>: redis-cli에서 한글을 보낼 때 깨진다면 --raw 옵션을 붙여 접속하세요 (redis-cli --raw).
+
+### 5. 요약: 전송 시나리오
+
+|대상|목적|redis-cli 명령어 예시|
+|-----|-----|---|
+| 특정 고객  | 개별 공지 전송 | publish chatRoom "{\"type\":\"TALK\",\"roomId\":\"고객방ID\",\"sender\":\"관리자\",\"message\":\"안녕하세요\"}" |
+| 상담사  | 상담 요청 생성 | publish chatRoom "{\"type\":\"REQ_COUNSELOR\",\"roomId\":\"new_id\",\"sender\":\"봇\",\"message\":\"연결요청\"}" |
+| 전체 서버  | 메시지 흐름 감시 | subscribe chatRoom |
+
+
+이제 redis-cli를 통해 수동으로 제어할 수 있습니다. 혹시 특정 고객을 강제로 채팅방에서 퇴장시키거나 세션을 만료시키는 Redis 명령어 조합도 필요하신가요?
+
+
+## Q(gemini). wchat 시스템은 Redis Pub/Sub 기능을 통해 서버 간 메시지를 공유한다고 하는데 redis gui를 통해 어떤 큐가 생성되었는지, 어떤 큐에 데이터가 있는지 모니터링할 수 있나요? 모니터링 할 수 있다면 방법을 알려줘
+## A.
+네, Redis GUI 툴(예: Redis Insight, Another Redis Desktop Manager 등)을 사용하여 모니터링이 가능합니다. 하지만 여기서 한 가지 짚고 넘어가야 할 중요한 개념 차이가 있습니다.
+
+현재 wchat 시스템에서 사용 중인 Redis Pub/Sub은 '메시지 큐(Queue)'처럼 데이터를 보관하는 방식이 아니라, '라디오 방송(Broadcasting)' 방식입니다.
+
+
+### 1. Pub/Sub 모니터링의 특이점
+Pub/Sub은 Redis 내부에 데이터를 저장하지 않습니다. 메시지가 발행(Publish)되는 순간, 현재 접속해 있는 구독자(Subscriber)에게 전달되고 즉시 사라집니다.
+
+* GUI에서 '키(Key)' 목록을 봐도 안 보입니다: Pub/Sub 채널은 Redis의 Key-Value 저장소에 저장되는 데이터가 아니므로 일반적인 키 목록에는 나타나지 않습니다.
+
+* 실시간 모니터링만 가능: 메시지가 흐르는 그 순간에만 GUI의 모니터링 도구를 통해 볼 수 있습니다.
+___
+
+### 2. Redis Insight를 활용한 모니터링 방법 (추천)
+   Redis 공식 무료 GUI 툴인 Redis Insight를 기준으로 설명해 드립니다.
+
+#### ① Pub/Sub 전용 탭 사용
+1. Redis Insight 좌측 메뉴에서 Pub/Sub 아이콘을 클릭합니다.
+
+1. Add Channel Subscription 버튼을 누릅니다.
+
+1. 채널명에 chatRoom을 입력합니다.
+
+1. 이제 시스템에서 메시지가 오가면, 실시간으로 JSON 데이터가 화면에 리스트업되는 것을 확인할 수 있습니다.
+
+#### ② 실시간 명령 로그(Monitor) 확인
+1. 좌측 하단의 Terminal이나 Log 메뉴를 클릭합니다.
+
+1. 명령어 창에 MONITOR라고 입력하거나 로그 탭을 활성화합니다.
+
+1. 서버에서 호출하는 모든 PUBLISH chatRoom ... 명령어를 실시간으로 가로채서 확인할 수 있습니다.
+
+### 3. 채팅방 정보(ChatRoom) 모니터링
+반면, ChatRoomRepository.java에서 저장한 채팅방 목록 정보는 Redis 내부에 데이터로 존재합니다.
+
+* 데이터 타입: Hash
+
+* 키 이름: CHAT_ROOMS
+
+* 확인 방법: 1. GUI의 Browser 탭에서 CHAT_ROOMS라는 키를 검색합니다. 2. 클릭하면 현재 생성된 모든 채팅방 ID와 고객명, isBotMode 상태(true/false)를 테이블 형태로 볼 수 있습니다.
+
+### 4. 요약: GUI에서 확인할 것
+|확인 대상|Redis 타입|GUI 확인 메뉴|특징|
+|-------|----------|----------|--|
+|채팅 메시지|Pub/Sub|Pub/Sub / Monitor|실시간 스트리밍 (지나간 건 안 보임)|
+  |채팅방 정보|Hash | Browser / Keys | 영구 저장됨 (상담사가 수락했는지 등 확인 가능) |
+
+### 5. 만약 "데이터가 남아있는 큐"를 원하신다면?
+만약 메시지가 사라지지 않고 상담사가 나중에 접속해도 볼 수 있게 "큐에 쌓여있는 것"을 확인하고 싶다면, 현재의 Pub/Sub 구조 대신 Redis List나 Redis Stream 데이터 타입을 사용해야 합니다.
+
+<b>상담사가 로그인하기 전의 대화 내역도 저장하여 나중에 보여줄 수 있도록 Redis List 기반으로 대화 로그 저장 기능을 추가해 드릴까요?</>
