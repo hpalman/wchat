@@ -12,7 +12,8 @@ const app = express();
 app.use(express.json());
 
 // 회신을 보낼 wchat 서버의 설정 (필요 시 수정)
-const WCHAT_SERVER_URL = "http://localhost:8083/chat/bot/callback";
+// const WCHAT_SERVER_URL = "http://localhost:8083/chat/bot/callback";
+const WCHAT_SERVER_URL = "http://localhost:8089/api/bot/callback";
 
 /**
  * [POST] /api/ask
@@ -21,7 +22,10 @@ const WCHAT_SERVER_URL = "http://localhost:8083/chat/bot/callback";
 app.post('/api/ask', (req, res) => {
     // 1. 요청 데이터 추출 (wchat에서 보낸 ChatMessage 객체 가정)
     const { roomId, sender, message } = req.body;
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
 
+    
     console.log(`[수신] 방번호: ${roomId}, 발신자: ${sender}, 질문내용: ${message}`);
 
     // 2. 즉시 200 OK 응답 (비동기 처리를 위해 접수 확인만 보냄)
